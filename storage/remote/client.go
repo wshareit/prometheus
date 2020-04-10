@@ -56,7 +56,7 @@ type ClientConfig struct {
 	HTTPClientConfig config_util.HTTPClientConfig
 }
 
-// ReadClient allows to use SAMPLES method read against remote server.
+// ReadClient uses the SAMPLES method of remote read to read series samples from remote server.
 // TODO(bwplotka): Add streamed chunked remote read method as well (https://github.com/prometheus/prometheus/issues/5926).
 type ReadClient interface {
 	Read(ctx context.Context, query *prompb.Query) (*prompb.QueryResult, error)

@@ -325,7 +325,6 @@ func (q *mergeGenericQuerier) Select(_ bool, hints *SelectHints, matchers ...*la
 		return nil, warnings, priErr
 	}
 
-	// NOTE: newGenericMergeSeriesSet always return series sorted.
 	return newGenericMergeSeriesSet(seriesSets, q, q.merge), warnings, nil
 }
 
