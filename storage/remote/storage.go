@@ -114,7 +114,8 @@ func (s *Storage) ApplyConfig(conf *config.Config) error {
 		if rrConf.Name != "" {
 			name = rrConf.Name
 		}
-		c, err := NewReadClient(s.queries.WithLabelValues(name, rrConf.URL.String()), name, &ClientConfig{
+
+		c, err := newReadClient(s.queries.WithLabelValues(name, rrConf.URL.String()), name, &ClientConfig{
 			URL:              rrConf.URL,
 			Timeout:          rrConf.RemoteTimeout,
 			HTTPClientConfig: rrConf.HTTPClientConfig,

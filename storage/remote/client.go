@@ -62,9 +62,9 @@ type ReadClient interface {
 	Read(ctx context.Context, query *prompb.Query) (*prompb.QueryResult, error)
 }
 
-// NewReadClient creates a new client for remote read.
+// newReadClient creates a new client for remote read.
 // Caller has to ensure there are no duplicated clients.
-func NewReadClient(readQueries prometheus.Gauge, name string, conf *ClientConfig) (ReadClient, error) {
+func newReadClient(readQueries prometheus.Gauge, name string, conf *ClientConfig) (ReadClient, error) {
 	httpClient, err := config_util.NewClientFromConfig(conf.HTTPClientConfig, "remote_storage", false)
 	if err != nil {
 		return nil, err
