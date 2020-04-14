@@ -1,488 +1,393 @@
 package gophercloud
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
-// BaseError is an error type that all other error types embed.
-type BaseError struct {
-	DefaultErrString string
-	Info             string
+//Define Service error information.
+const (
+	//ECS
+	EcsAuthRequired          = "Authentication required"
+	EcsPoilcyNotAllow        = "Policy doesn't allow .*. to be performed"
+	EcsTokenRoleEmpty        = "token role is empty, forbidden to perform this action"
+	EcsTokenRoleForbidden    = "token role * is forbidden to perform this action"
+	EcsErrorRoleToPerform    = "do not have the required roles, forbbiden to perform this action"
+	EcsQuotaExceeded         = "Quota exceeded for instances"
+	EcsPortNumberExceed      = "Maximum number of ports exceeded"
+	EcsVolumeNumberOver      = "Volume number is over limit"
+	EcsBlockImageNotFound    = "Block Device Mapping is Invalid: failed to get image.*."
+	EcsImageNotFound         = "Image * could not be found."
+	EcsFlavorNotFound        = "Flavor .*. could not be found"
+	EcsNetworkNotFound       = "Network.*.could not be found"
+	EcsBlockDevInvalid       = "Block Device Mapping is Invalid"
+	EcsAZUnavailable         = "The requested availability zone is not available"
+	EcsSecurityGroupNotFound = "Security group .*. not found"
+	EcsKeyPairNotFound       = "Keypair .*. not found for user *"
+	EcsInstanceGroupNotFound = "Instance group .*. could not be found"
+	EcsInvalidMetadata       = "Invalid metadata.*"
+	EcsUserDataBase64        = "User data needs to be valid base 64"
+	EcsUserDataTooLarge      = "User data too large. User data must be no larger than .*"
+	EcsInstanceDiskExceed    = "The created instance's disk would be too small"
+	EcsFlavorMemoryNotEnough = "Flavor's memory is too small for requested image"
+	EcsInstanceNotFound      = "Instance .*. could not be found"
+	EcsInstanceIsLocked      = "Instance .*. is locked"
+	EcsInstCantBeOperated    = "Cannot .*. instance .*. while it is in .*"
+	EcsUnexpectedApiERROR    = "Unexpected API Error"
+	EcsServerCantComply      = "The server could not comply with the request since it is either malformed.*."
+	EcsInvalidFlavorRef      = "Invalid flavorRef provided"
+	EcsInvalidKeyName        = "Invalid key_name provided"
+	EcsInvalidInputField     = "Invalid input for field/attribute"
+	EcsResourceSoldOut       = "Instance resource is temporarily sold out."
+
+	//IMS
+	Ims0027NoImageFoundWithId = "No image found with ID"
+	Ims0144FailedFindImage    = "Failed to find image"
+
+	//ELB
+	ELB2001AdminStateUpFalse    = "Admin_state_up is not allowed with False"
+	ELB2002IpNotValid           = "IP address .*. is not a valid IP for the specified subnet."
+	ELB2003PoolNotFound         = "pool .*. could not be found"
+	ELB2004MemberNotSupportPort = "Member not support protocol port *"
+	ELB2005SubnetMismatch       = "Router of member's subnet .*. and router of loadbalancer's subnet .*. mismatch"
+	ELB2006IpPortAlreadyPresent = "Member with address .*. and protocol_port .*. already present in pool .*."
+	ELB2007MemberNotFound       = "member .*. could not be found"
+
+	ELB6101QuotaExceeded  = "Quota exceeded for resources: \\['listener'\\]"
+	ELB2541QuotaExceeded = "Quota exceeded for resources: \\['pool'\\]"
+	ELBb015QuotaExceeded = "Quota exceeded for resources: \\['l7policy'\\]"
+	ELB1071QuotaExceeded = "Quota exceeded for resources: \\['loadbalancer'\\]"
+)
+
+//Common Error.
+const (
+	//Com1000
+	CE_MissingInputCode    = "Com.1000" //client error
+	CE_MissingInputMessage = "Missing input for argument [%s]"
+
+	//Com1001
+	CE_StreamControlApiCode    = "Com.1001" //server error
+	CE_StreamControlApiMessage = "The maximum request receiving rate is exceeded"
+
+	//Com1002
+	CE_InvalidInputCode    = "Com.1002" //client error
+	CE_InvalidInputMessage = "Invalid input provided for argument [%s]"
+
+	CE_OptionTypeNotStructCode    = "Com.1002" //client error
+	CE_OptionTypeNotStructMessage = "Options type is not a struct"
+
+	//Com1003
+	CE_ResourceNotFoundCode    = "Com.1003" //client error
+	CE_ResourceNotFoundMessage = "Unable to find %s with name %s"
+
+	CE_MultipleResourcesFoundCode    = "Com.1003" //client error
+	CE_MultipleResourcesFoundMessage = "Found %d %ss matching %s"
+
+	CE_ErrUnexpectedTypeCode    = "Com.1003" //client error
+	CE_ErrUnexpectedTypeMessage = "Expected %s but got %s"
+
+	//Com1004
+	CE_NoClientProvidedCode    = "Com.1004" //client error
+	CE_NoClientProvidedMessage = "A service client must be provided to find a resource ID by name"
+
+	CE_NoEndPointInCatalogCode    = "Com.1004" //client error
+	CE_NoEndPointInCatalogMessage = "No suitable endpoint could be found in the service catalog."
+
+	//Com1005
+	CE_ApiNotFoundCode    = "Com.1005" //server error
+	CE_ApiNotFoundMessage = "API not found"
+
+	//1006
+	CE_TimeoutErrorCode    = "Com.1006" //client error
+	CE_TimeoutErrorMessage = "The request timed out %s times(%s for retry), perhaps we should have the threshold raised a little?"
+
+	CE_ReauthExceedCode    = "Com.1006" //client error
+	CE_ReauthExceedMessage = "Tried to re-authenticate 3 times with no success."
+
+	CE_ReauthFuncErrorCode    = "Com.1006" //client error
+	CE_ReauthFuncErrorMessage = "Get reauth function error [%s]"
+
+	//Com2000
+	//其他非典型错误，不再统一定义。
+)
+
+//UnifiedError, Unified definition of backend errors.
+type UnifiedError struct {
+	ErrCode    interface{} `json:"code"`
+	ErrMessage string      `json:"message"`
 }
 
-func (e BaseError) Error() string {
-	e.DefaultErrString = "An error occurred while executing a Gophercloud request."
-	return e.choseErrString()
-}
-
-func (e BaseError) choseErrString() string {
-	if e.Info != "" {
-		return e.Info
+//Initialize SDK client error.
+func NewSystemCommonError(code, message string) error {
+	return &UnifiedError{
+		ErrCode:    code,
+		ErrMessage: message,
 	}
-	return e.DefaultErrString
 }
 
-// ErrMissingInput is the error when input is required in a particular
-// situation but not provided by the user
-type ErrMissingInput struct {
-	BaseError
-	Argument string
-}
-
-func (e ErrMissingInput) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Missing input for argument [%s]", e.Argument)
-	return e.choseErrString()
-}
-
-// ErrInvalidInput is an error type used for most non-HTTP Gophercloud errors.
-type ErrInvalidInput struct {
-	ErrMissingInput
-	Value interface{}
-}
-
-func (e ErrInvalidInput) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Invalid input provided for argument [%s]: [%+v]", e.Argument, e.Value)
-	return e.choseErrString()
-}
-
-// ErrMissingEnvironmentVariable is the error when environment variable is required
-// in a particular situation but not provided by the user
-type ErrMissingEnvironmentVariable struct {
-	BaseError
-	EnvironmentVariable string
-}
-
-func (e ErrMissingEnvironmentVariable) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Missing environment variable [%s]", e.EnvironmentVariable)
-	return e.choseErrString()
-}
-
-// ErrMissingAnyoneOfEnvironmentVariables is the error when anyone of the environment variables
-// is required in a particular situation but not provided by the user
-type ErrMissingAnyoneOfEnvironmentVariables struct {
-	BaseError
-	EnvironmentVariables []string
-}
-
-func (e ErrMissingAnyoneOfEnvironmentVariables) Error() string {
-	e.DefaultErrString = fmt.Sprintf(
-		"Missing one of the following environment variables [%s]",
-		strings.Join(e.EnvironmentVariables, ", "),
-	)
-	return e.choseErrString()
-}
-
-// ErrUnexpectedResponseCode is returned by the Request method when a response code other than
-// those listed in OkCodes is encountered.
-type ErrUnexpectedResponseCode struct {
-	BaseError
-	URL      string
-	Method   string
-	Expected []int
-	Actual   int
-	Body     []byte
-}
-
-func (e ErrUnexpectedResponseCode) Error() string {
-	e.DefaultErrString = fmt.Sprintf(
-		"Expected HTTP response code %v when accessing [%s %s], but got %d instead\n%s",
-		e.Expected, e.Method, e.URL, e.Actual, e.Body,
-	)
-	return e.choseErrString()
-}
-
-// GetStatusCode returns the actual status code of the error.
-func (e ErrUnexpectedResponseCode) GetStatusCode() int {
-	return e.Actual
-}
-
-// StatusCodeError is a convenience interface to easily allow access to the
-// status code field of the various ErrDefault* types.
-//
-// By using this interface, you only have to make a single type cast of
-// the returned error to err.(StatusCodeError) and then call GetStatusCode()
-// instead of having a large switch statement checking for each of the
-// ErrDefault* types.
-type StatusCodeError interface {
-	Error() string
-	GetStatusCode() int
-}
-
-// ErrDefault400 is the default error type returned on a 400 HTTP response code.
-type ErrDefault400 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault401 is the default error type returned on a 401 HTTP response code.
-type ErrDefault401 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault403 is the default error type returned on a 403 HTTP response code.
-type ErrDefault403 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault404 is the default error type returned on a 404 HTTP response code.
-type ErrDefault404 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault405 is the default error type returned on a 405 HTTP response code.
-type ErrDefault405 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault408 is the default error type returned on a 408 HTTP response code.
-type ErrDefault408 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault409 is the default error type returned on a 409 HTTP response code.
-type ErrDefault409 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault429 is the default error type returned on a 429 HTTP response code.
-type ErrDefault429 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault500 is the default error type returned on a 500 HTTP response code.
-type ErrDefault500 struct {
-	ErrUnexpectedResponseCode
-}
-
-// ErrDefault503 is the default error type returned on a 503 HTTP response code.
-type ErrDefault503 struct {
-	ErrUnexpectedResponseCode
-}
-
-func (e ErrDefault400) Error() string {
-	e.DefaultErrString = fmt.Sprintf(
-		"Bad request with: [%s %s], error message: %s",
-		e.Method, e.URL, e.Body,
-	)
-	return e.choseErrString()
-}
-func (e ErrDefault401) Error() string {
-	return "Authentication failed"
-}
-func (e ErrDefault403) Error() string {
-	e.DefaultErrString = fmt.Sprintf(
-		"Request forbidden: [%s %s], error message: %s",
-		e.Method, e.URL, e.Body,
-	)
-	return e.choseErrString()
-}
-func (e ErrDefault404) Error() string {
-	return "Resource not found"
-}
-func (e ErrDefault405) Error() string {
-	return "Method not allowed"
-}
-func (e ErrDefault408) Error() string {
-	return "The server timed out waiting for the request"
-}
-func (e ErrDefault429) Error() string {
-	return "Too many requests have been sent in a given amount of time. Pause" +
-		" requests, wait up to one minute, and try again."
-}
-func (e ErrDefault500) Error() string {
-	return "Internal Server Error"
-}
-func (e ErrDefault503) Error() string {
-	return "The service is currently unable to handle the request due to a temporary" +
-		" overloading or maintenance. This is a temporary condition. Try again later."
-}
-
-// Err400er is the interface resource error types implement to override the error message
-// from a 400 error.
-type Err400er interface {
-	Error400(ErrUnexpectedResponseCode) error
-}
-
-// Err401er is the interface resource error types implement to override the error message
-// from a 401 error.
-type Err401er interface {
-	Error401(ErrUnexpectedResponseCode) error
-}
-
-// Err403er is the interface resource error types implement to override the error message
-// from a 403 error.
-type Err403er interface {
-	Error403(ErrUnexpectedResponseCode) error
-}
-
-// Err404er is the interface resource error types implement to override the error message
-// from a 404 error.
-type Err404er interface {
-	Error404(ErrUnexpectedResponseCode) error
-}
-
-// Err405er is the interface resource error types implement to override the error message
-// from a 405 error.
-type Err405er interface {
-	Error405(ErrUnexpectedResponseCode) error
-}
-
-// Err408er is the interface resource error types implement to override the error message
-// from a 408 error.
-type Err408er interface {
-	Error408(ErrUnexpectedResponseCode) error
-}
-
-// Err409er is the interface resource error types implement to override the error message
-// from a 409 error.
-type Err409er interface {
-	Error409(ErrUnexpectedResponseCode) error
-}
-
-// Err429er is the interface resource error types implement to override the error message
-// from a 429 error.
-type Err429er interface {
-	Error429(ErrUnexpectedResponseCode) error
-}
-
-// Err500er is the interface resource error types implement to override the error message
-// from a 500 error.
-type Err500er interface {
-	Error500(ErrUnexpectedResponseCode) error
-}
-
-// Err503er is the interface resource error types implement to override the error message
-// from a 503 error.
-type Err503er interface {
-	Error503(ErrUnexpectedResponseCode) error
-}
-
-// ErrTimeOut is the error type returned when an operations times out.
-type ErrTimeOut struct {
-	BaseError
-}
-
-func (e ErrTimeOut) Error() string {
-	e.DefaultErrString = "A time out occurred"
-	return e.choseErrString()
-}
-
-// ErrUnableToReauthenticate is the error type returned when reauthentication fails.
-type ErrUnableToReauthenticate struct {
-	BaseError
-	ErrOriginal error
-}
-
-func (e ErrUnableToReauthenticate) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Unable to re-authenticate: %s", e.ErrOriginal)
-	return e.choseErrString()
-}
-
-// ErrErrorAfterReauthentication is the error type returned when reauthentication
-// succeeds, but an error occurs afterword (usually an HTTP error).
-type ErrErrorAfterReauthentication struct {
-	BaseError
-	ErrOriginal error
-}
-
-func (e ErrErrorAfterReauthentication) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Successfully re-authenticated, but got error executing request: %s", e.ErrOriginal)
-	return e.choseErrString()
-}
-
-// ErrServiceNotFound is returned when no service in a service catalog matches
-// the provided EndpointOpts. This is generally returned by provider service
-// factory methods like "NewComputeV2()" and can mean that a service is not
-// enabled for your account.
-type ErrServiceNotFound struct {
-	BaseError
-}
-
-func (e ErrServiceNotFound) Error() string {
-	e.DefaultErrString = "No suitable service could be found in the service catalog."
-	return e.choseErrString()
-}
-
-// ErrEndpointNotFound is returned when no available endpoints match the
-// provided EndpointOpts. This is also generally returned by provider service
-// factory methods, and usually indicates that a region was specified
-// incorrectly.
-type ErrEndpointNotFound struct {
-	BaseError
-}
-
-func (e ErrEndpointNotFound) Error() string {
-	e.DefaultErrString = "No suitable endpoint could be found in the service catalog."
-	return e.choseErrString()
-}
-
-// ErrResourceNotFound is the error when trying to retrieve a resource's
-// ID by name and the resource doesn't exist.
-type ErrResourceNotFound struct {
-	BaseError
-	Name         string
-	ResourceType string
-}
-
-func (e ErrResourceNotFound) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Unable to find %s with name %s", e.ResourceType, e.Name)
-	return e.choseErrString()
-}
-
-// ErrMultipleResourcesFound is the error when trying to retrieve a resource's
-// ID by name and multiple resources have the user-provided name.
-type ErrMultipleResourcesFound struct {
-	BaseError
-	Name         string
-	Count        int
-	ResourceType string
-}
-
-func (e ErrMultipleResourcesFound) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Found %d %ss matching %s", e.Count, e.ResourceType, e.Name)
-	return e.choseErrString()
-}
-
-// ErrUnexpectedType is the error when an unexpected type is encountered
-type ErrUnexpectedType struct {
-	BaseError
-	Expected string
-	Actual   string
-}
-
-func (e ErrUnexpectedType) Error() string {
-	e.DefaultErrString = fmt.Sprintf("Expected %s but got %s", e.Expected, e.Actual)
-	return e.choseErrString()
-}
-
-func unacceptedAttributeErr(attribute string) string {
-	return fmt.Sprintf("The base Identity V3 API does not accept authentication by %s", attribute)
-}
-
-func redundantWithTokenErr(attribute string) string {
-	return fmt.Sprintf("%s may not be provided when authenticating with a TokenID", attribute)
-}
-
-func redundantWithUserID(attribute string) string {
-	return fmt.Sprintf("%s may not be provided when authenticating with a UserID", attribute)
-}
-
-// ErrAPIKeyProvided indicates that an APIKey was provided but can't be used.
-type ErrAPIKeyProvided struct{ BaseError }
-
-func (e ErrAPIKeyProvided) Error() string {
-	return unacceptedAttributeErr("APIKey")
-}
-
-// ErrTenantIDProvided indicates that a TenantID was provided but can't be used.
-type ErrTenantIDProvided struct{ BaseError }
-
-func (e ErrTenantIDProvided) Error() string {
-	return unacceptedAttributeErr("TenantID")
-}
-
-// ErrTenantNameProvided indicates that a TenantName was provided but can't be used.
-type ErrTenantNameProvided struct{ BaseError }
-
-func (e ErrTenantNameProvided) Error() string {
-	return unacceptedAttributeErr("TenantName")
-}
-
-// ErrUsernameWithToken indicates that a Username was provided, but token authentication is being used instead.
-type ErrUsernameWithToken struct{ BaseError }
-
-func (e ErrUsernameWithToken) Error() string {
-	return redundantWithTokenErr("Username")
-}
-
-// ErrUserIDWithToken indicates that a UserID was provided, but token authentication is being used instead.
-type ErrUserIDWithToken struct{ BaseError }
-
-func (e ErrUserIDWithToken) Error() string {
-	return redundantWithTokenErr("UserID")
-}
-
-// ErrDomainIDWithToken indicates that a DomainID was provided, but token authentication is being used instead.
-type ErrDomainIDWithToken struct{ BaseError }
-
-func (e ErrDomainIDWithToken) Error() string {
-	return redundantWithTokenErr("DomainID")
-}
-
-// ErrDomainNameWithToken indicates that a DomainName was provided, but token authentication is being used instead.s
-type ErrDomainNameWithToken struct{ BaseError }
-
-func (e ErrDomainNameWithToken) Error() string {
-	return redundantWithTokenErr("DomainName")
-}
-
-// ErrUsernameOrUserID indicates that neither username nor userID are specified, or both are at once.
-type ErrUsernameOrUserID struct{ BaseError }
-
-func (e ErrUsernameOrUserID) Error() string {
-	return "Exactly one of Username and UserID must be provided for password authentication"
-}
-
-// ErrDomainIDWithUserID indicates that a DomainID was provided, but unnecessary because a UserID is being used.
-type ErrDomainIDWithUserID struct{ BaseError }
-
-func (e ErrDomainIDWithUserID) Error() string {
-	return redundantWithUserID("DomainID")
-}
-
-// ErrDomainNameWithUserID indicates that a DomainName was provided, but unnecessary because a UserID is being used.
-type ErrDomainNameWithUserID struct{ BaseError }
-
-func (e ErrDomainNameWithUserID) Error() string {
-	return redundantWithUserID("DomainName")
-}
-
-// ErrDomainIDOrDomainName indicates that a username was provided, but no domain to scope it.
-// It may also indicate that both a DomainID and a DomainName were provided at once.
-type ErrDomainIDOrDomainName struct{ BaseError }
-
-func (e ErrDomainIDOrDomainName) Error() string {
-	return "You must provide exactly one of DomainID or DomainName to authenticate by Username"
-}
-
-// ErrMissingPassword indicates that no password was provided and no token is available.
-type ErrMissingPassword struct{ BaseError }
-
-func (e ErrMissingPassword) Error() string {
-	return "You must provide a password to authenticate"
-}
-
-// ErrScopeDomainIDOrDomainName indicates that a domain ID or Name was required in a Scope, but not present.
-type ErrScopeDomainIDOrDomainName struct{ BaseError }
-
-func (e ErrScopeDomainIDOrDomainName) Error() string {
-	return "You must provide exactly one of DomainID or DomainName in a Scope with ProjectName"
-}
-
-// ErrScopeProjectIDOrProjectName indicates that both a ProjectID and a ProjectName were provided in a Scope.
-type ErrScopeProjectIDOrProjectName struct{ BaseError }
-
-func (e ErrScopeProjectIDOrProjectName) Error() string {
-	return "You must provide at most one of ProjectID or ProjectName in a Scope"
-}
-
-// ErrScopeProjectIDAlone indicates that a ProjectID was provided with other constraints in a Scope.
-type ErrScopeProjectIDAlone struct{ BaseError }
-
-func (e ErrScopeProjectIDAlone) Error() string {
-	return "ProjectID must be supplied alone in a Scope"
-}
-
-// ErrScopeEmpty indicates that no credentials were provided in a Scope.
-type ErrScopeEmpty struct{ BaseError }
-
-func (e ErrScopeEmpty) Error() string {
-	return "You must provide either a Project or Domain in a Scope"
-}
-
-// ErrAppCredMissingSecret indicates that no Application Credential Secret was provided with Application Credential ID or Name
-type ErrAppCredMissingSecret struct{ BaseError }
-
-func (e ErrAppCredMissingSecret) Error() string {
-	return "You must provide an Application Credential Secret"
+//NewSystemServerError,Handle background API error codes.
+func NewSystemServerError(httpStatus int, responseContent string) error {
+	//e.Body {"error": {"message": "instance is not shutoff.","code": "IMG.0008"}}
+	return ParseSeverError(httpStatus, responseContent)
+}
+
+//Error,Implement the Error() interface.
+func (e UnifiedError) Error() string {
+	return fmt.Sprintf("{\"ErrorCode\":\"%s\",\"Message\":\"%s\"}", e.ErrCode, e.ErrMessage)
+}
+
+//ErrorCode,Error code converted to string type.
+func (e UnifiedError) ErrorCode() string {
+	if s, ok := e.ErrCode.(string); ok {
+		return s
+	}
+
+	if i, ok := e.ErrCode.(int); ok {
+		return string(i)
+	}
+
+	return ""
+}
+
+//Message,Return error message.
+func (e UnifiedError) Message() string {
+	return e.ErrMessage
+}
+
+// OneLevelError,Define the error code structure and match the error code of one layer of json structure
+type OneLevelError struct {
+	Message    string
+	Request_id string
+	ErrCode    string `json:"error_code"`
+	ErrMsg     string `json:"error_msg"`
+	Code	   string `json:"code"`
+}
+
+// ParseSeverError,This function uses json serialization to parse background API error codes.
+func ParseSeverError(httpStatus int, responseContent string) error {
+	//一层结构如下：
+	//第一种：{"error_msg": "Instance *89973356-f733-418b-95b2-f6fc27244f18 could not be found.","err_code": 404}
+	//第二种：{"message": "Instance *89973356-f733-418b-95b2-f6fc27244f18 could not be found.","code": "VPC.0101"}
+	//第三种：html 页面，返回字符串形式，走正则匹配错误码。
+
+	//两层结构如下：
+	//{"itemNotFound": {"message": "Instance *89973356-f733-418b-95b2-f6fc27244f18 could not be found.", "code": 404}}
+	//{"error": {"message": "instance is not shutoff.","code": "IMG.0008"}}
+	var olErr OneLevelError
+	var errMsg = make(map[string]UnifiedError)
+	var isDevApi bool //是否为自研api接口
+	var errCode string
+	message := responseContent
+
+	err := json.Unmarshal([]byte(responseContent), &errMsg)
+	if err != nil { //一层结构错误
+		err1 := json.Unmarshal([]byte(responseContent), &olErr)
+		if err1 != nil {
+			errCode = MatchErrorCode(httpStatus, message)
+			message = responseContent
+		} else {
+			if olErr.Code == "" && olErr.ErrCode == "" {
+				errCode = MatchErrorCode(httpStatus, olErr.Message)
+				message = olErr.Message
+			} else {
+				if olErr.Code != "" {
+					errCode = olErr.Code
+					message = olErr.Message
+				}
+				if olErr.ErrCode != "" {
+					errCode = olErr.ErrCode
+					message = olErr.ErrMsg
+				}
+			}
+		}
+	} else { //两层结构错误
+		for _, em := range errMsg {
+			message = em.ErrMessage
+
+			/*
+				自研api的code字段为string且包含'.'，否则为原生api，
+				原生api也可能是string类型，但是不包含'.'
+				原生api的errCode走解析流程这里不需要赋值
+				自研api的code示例:"IMG.0144"
+				原生api的code示例:400或者"400"
+			*/
+			switch em.ErrCode.(type) {
+			case string:
+				if strings.Contains(em.ErrCode.(string), ".") {
+					isDevApi = true
+					errCode = em.ErrCode.(string)
+				} else {
+					isDevApi = false
+				}
+			default:
+				isDevApi = false
+			}
+		}
+
+		//原生api接口走解析流程
+		if !isDevApi {
+			errCode = MatchErrorCode(httpStatus, message)
+		}
+	}
+
+	return &UnifiedError{
+		ErrCode:    errCode,
+		ErrMessage: message,
+	}
+}
+
+//MatchErrorCode,Match the error code according to the error message
+func MatchErrorCode(httpStatus int, message string) string {
+	//common error
+	if ok, _ := regexp.MatchString(CE_ApiNotFoundMessage, message); ok {
+		return CE_ApiNotFoundCode
+	}
+	if ok, _ := regexp.MatchString(CE_StreamControlApiMessage, message); ok {
+		return CE_StreamControlApiCode
+	}
+
+	//ECS error
+	if ok, _ := regexp.MatchString(EcsAuthRequired, message); ok {
+		return "Ecs.1499"
+	}
+	if ok, _ := regexp.MatchString(EcsPoilcyNotAllow, message); ok {
+		return "Ecs.1500"
+	}
+	if ok, _ := regexp.MatchString(EcsTokenRoleEmpty, message); ok {
+		return "Ecs.1500"
+	}
+	if ok, _ := regexp.MatchString(EcsTokenRoleForbidden, message); ok {
+		return "Ecs.1500"
+	}
+	if ok, _ := regexp.MatchString(EcsErrorRoleToPerform, message); ok {
+		return "Ecs.1500"
+	}
+	if ok, _ := regexp.MatchString(EcsQuotaExceeded, message); ok {
+		return "Ecs.1501"
+	}
+	if ok, _ := regexp.MatchString(EcsPortNumberExceed, message); ok {
+		return "Ecs.1502"
+	}
+	if ok, _ := regexp.MatchString(EcsVolumeNumberOver, message); ok {
+		return "Ecs.1503"
+	}
+	if ok, _ := regexp.MatchString(EcsBlockImageNotFound, message); ok {
+		return "Ecs.1511"
+	}
+	if ok, _ := regexp.MatchString(EcsImageNotFound, message); ok {
+		return "Ecs.1511"
+	}
+	if ok, _ := regexp.MatchString(EcsFlavorNotFound, message); ok {
+		return "Ecs.1512"
+	}
+	if ok, _ := regexp.MatchString(EcsInvalidFlavorRef, message); ok {
+		return "Ecs.1512"
+	}
+	if ok, _ := regexp.MatchString(EcsNetworkNotFound, message); ok {
+		return "Ecs.1513"
+	}
+	if ok, _ := regexp.MatchString(EcsBlockDevInvalid, message); ok {
+		return "Ecs.1514"
+	}
+	if ok, _ := regexp.MatchString(EcsAZUnavailable, message); ok {
+		return "Ecs.1515"
+	}
+	if ok, _ := regexp.MatchString(EcsSecurityGroupNotFound, message); ok {
+		return "Ecs.1516"
+	}
+	if ok, _ := regexp.MatchString(EcsKeyPairNotFound, message); ok {
+		return "Ecs.1517"
+	}
+	if ok, _ := regexp.MatchString(EcsInvalidKeyName, message); ok {
+		return "Ecs.1517"
+	}
+	if ok, _ := regexp.MatchString(EcsInstanceGroupNotFound, message); ok {
+		return "Ecs.1518"
+	}
+	if ok, _ := regexp.MatchString(EcsInvalidMetadata, message); ok {
+		return "Ecs.1519"
+	}
+	if ok, _ := regexp.MatchString(EcsInvalidInputField, message); ok {
+		return "Ecs.1519"
+	}
+	if ok, _ := regexp.MatchString(EcsUserDataBase64, message); ok {
+		return "Ecs.1520"
+	}
+	if ok, _ := regexp.MatchString(EcsUserDataTooLarge, message); ok {
+		return "Ecs.1521"
+	}
+	if ok, _ := regexp.MatchString(EcsInstanceDiskExceed, message); ok {
+		return "Ecs.1522"
+	}
+	if ok, _ := regexp.MatchString(EcsFlavorMemoryNotEnough, message); ok {
+		return "Ecs.1523"
+	}
+	if ok, _ := regexp.MatchString(EcsResourceSoldOut, message); ok {
+		return "Ecs.1524"
+	}
+	if ok, _ := regexp.MatchString(EcsInstanceNotFound, message); ok {
+		return "Ecs.1544"
+	}
+	if ok, _ := regexp.MatchString(EcsInstanceIsLocked, message); ok {
+		return "Ecs.1545"
+	}
+	if ok, _ := regexp.MatchString(EcsInstCantBeOperated, message); ok {
+		return "Ecs.1546"
+	}
+	if ok, _ := regexp.MatchString(EcsServerCantComply, message); ok {
+		return "Ecs.1599"
+	}
+	if ok, _ := regexp.MatchString(EcsUnexpectedApiERROR, message); ok {
+		return "Ecs.1599"
+	}
+
+	//IMS error
+	if ok, _ := regexp.MatchString(Ims0027NoImageFoundWithId, message); ok {
+		return "IMG.0027"
+	}
+	if ok, _ := regexp.MatchString(Ims0144FailedFindImage, message); ok {
+		return "IMG.0144"
+	}
+
+	//ELB error
+	if ok, _ := regexp.MatchString(ELB2001AdminStateUpFalse, message); ok {
+		return "ELB.2001"
+	}
+	if ok, _ := regexp.MatchString(ELB2002IpNotValid, message); ok {
+		return "ELB.2002"
+	}
+	if ok, _ := regexp.MatchString(ELB2003PoolNotFound, message); ok {
+		return "ELB.2003"
+	}
+	if ok, _ := regexp.MatchString(ELB2004MemberNotSupportPort, message); ok {
+		return "ELB.2004"
+	}
+	if ok, _ := regexp.MatchString(ELB2005SubnetMismatch, message); ok {
+		return "ELB.2005"
+	}
+	if ok, _ := regexp.MatchString(ELB2006IpPortAlreadyPresent, message); ok {
+		return "ELB.2006"
+	}
+	if ok, _ := regexp.MatchString(ELB2007MemberNotFound, message); ok {
+		return "ELB.2007"
+	}
+
+	if ok, _ := regexp.MatchString(ELB6101QuotaExceeded, message); ok {
+		return "ELB.6101"
+	}
+	if ok, _ := regexp.MatchString(ELB2541QuotaExceeded, message); ok {
+		return "ELB.2541"
+	}
+	if ok, _ := regexp.MatchString(ELBb015QuotaExceeded, message); ok {
+		return "ELB.B015"
+	}
+	if ok, _ := regexp.MatchString(ELB1071QuotaExceeded, message); ok {
+		return "ELB.1071"
+	}
+
+	//没匹配上，用http状态码做error code
+	return "Com." + strconv.Itoa(httpStatus)
 }

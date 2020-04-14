@@ -16,15 +16,17 @@ package config
 import (
 	"github.com/pkg/errors"
 
+	"github.com/prometheus/prometheus/discovery/alb"
+	"github.com/prometheus/prometheus/discovery/autoscala"
 	"github.com/prometheus/prometheus/discovery/azure"
 	"github.com/prometheus/prometheus/discovery/consul"
 	"github.com/prometheus/prometheus/discovery/dns"
 	"github.com/prometheus/prometheus/discovery/ec2"
 	"github.com/prometheus/prometheus/discovery/file"
 	"github.com/prometheus/prometheus/discovery/gce"
+	"github.com/prometheus/prometheus/discovery/huawei_elb"
 	"github.com/prometheus/prometheus/discovery/kubernetes"
 	"github.com/prometheus/prometheus/discovery/marathon"
-	"github.com/prometheus/prometheus/discovery/openstack"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/prometheus/prometheus/discovery/triton"
 	"github.com/prometheus/prometheus/discovery/zookeeper"
@@ -52,12 +54,18 @@ type ServiceDiscoveryConfig struct {
 	GCESDConfigs []*gce.SDConfig `yaml:"gce_sd_configs,omitempty"`
 	// List of EC2 service discovery configurations.
 	EC2SDConfigs []*ec2.SDConfig `yaml:"ec2_sd_configs,omitempty"`
-	// List of OpenStack service discovery configurations.
-	OpenstackSDConfigs []*openstack.SDConfig `yaml:"openstack_sd_configs,omitempty"`
+	// // List of OpenStack service discovery configurations.
+	// OpenstackSDConfigs []*openstack.SDConfig `yaml:"openstack_sd_configs,omitempty"`
 	// List of Azure service discovery configurations.
 	AzureSDConfigs []*azure.SDConfig `yaml:"azure_sd_configs,omitempty"`
 	// List of Triton service discovery configurations.
 	TritonSDConfigs []*triton.SDConfig `yaml:"triton_sd_configs,omitempty"`
+	// List of ALB service discovery configurations.
+	ALBSDConfigs []*alb.SDConfig `yaml:"alb_sd_configs,omitempty"`
+	// List of Autoscala service discovery configurations.
+	AutoscalaSDConfigs []*autoscala.SDConfig `yaml:"autoscala_sd_configs,omitempty"`
+	// List of ELB service discovery configurations.
+	ELBSDConfigs []*huawei_elb.SDConfig `yaml:"elb_sd_configs,omitempty"`
 }
 
 // Validate validates the ServiceDiscoveryConfig.
@@ -107,11 +115,11 @@ func (c *ServiceDiscoveryConfig) Validate() error {
 			return errors.New("empty or null section in nerve_sd_configs")
 		}
 	}
-	for _, cfg := range c.OpenstackSDConfigs {
-		if cfg == nil {
-			return errors.New("empty or null section in openstack_sd_configs")
-		}
-	}
+	// for _, cfg := range c.OpenstackSDConfigs {
+	// 	if cfg == nil {
+	// 		return errors.New("empty or null section in openstack_sd_configs")
+	// 	}
+	// }
 	for _, cfg := range c.ServersetSDConfigs {
 		if cfg == nil {
 			return errors.New("empty or null section in serverset_sd_configs")
@@ -120,6 +128,21 @@ func (c *ServiceDiscoveryConfig) Validate() error {
 	for _, cfg := range c.StaticConfigs {
 		if cfg == nil {
 			return errors.New("empty or null section in static_configs")
+		}
+	}
+	for _, cfg := range c.ALBSDConfigs {
+		if cfg == nil {
+			return errors.New("empty or null section in alb_sd_configs")
+		}
+	}
+	for _, cfg := range c.AutoscalaSDConfigs {
+		if cfg == nil {
+			return errors.New("empty or null section in autoscala_sd_configs")
+		}
+	}
+	for _, cfg := range c.ELBSDConfigs {
+		if cfg == nil {
+			return errors.New("empty or null section in elb_sd_configs")
 		}
 	}
 	return nil

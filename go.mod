@@ -9,7 +9,7 @@ require (
 	github.com/Azure/go-autorest/autorest/to v0.3.0 // indirect
 	github.com/Azure/go-autorest/autorest/validation v0.2.0 // indirect
 	github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d
-	github.com/aws/aws-sdk-go v1.29.18
+	github.com/aws/aws-sdk-go v1.30.7
 	github.com/cespare/xxhash v1.1.0
 	github.com/dgryski/go-sip13 v0.0.0-20190329191031-25c5027a8c7b
 	github.com/edsrzf/mmap-go v1.0.0
@@ -60,3 +60,5 @@ require (
 )
 
 replace k8s.io/klog => github.com/simonpasquier/klog-gokit v0.1.0
+
+replace github.com/gophercloud/gophercloud => github.com/Huawei/cloud-sdk-go v1.0.21

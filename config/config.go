@@ -179,9 +179,6 @@ func resolveFilepaths(baseDir string, cfg *Config) {
 		for _, consulcfg := range cfg.ConsulSDConfigs {
 			tlsPaths(&consulcfg.TLSConfig)
 		}
-		for _, cfg := range cfg.OpenstackSDConfigs {
-			tlsPaths(&cfg.TLSConfig)
-		}
 		for _, cfg := range cfg.TritonSDConfigs {
 			tlsPaths(&cfg.TLSConfig)
 		}

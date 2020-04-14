@@ -45,9 +45,15 @@ func (current MarkerPageBase) IsEmpty() (bool, error) {
 	if b, ok := current.Body.([]interface{}); ok {
 		return len(b) == 0, nil
 	}
-	err := gophercloud.ErrUnexpectedType{}
-	err.Expected = "[]interface{}"
-	err.Actual = fmt.Sprintf("%v", reflect.TypeOf(current.Body))
+	//	err := gophercloud.ErrUnexpectedType{}
+	//	err.Expected = "[]interface{}"
+	//	err.Actual = fmt.Sprintf("%v", reflect.TypeOf(current.Body))
+	//	return true, err
+
+	expected := "[]interface{}"
+	actual := fmt.Sprintf("%v", reflect.TypeOf(current.Body))
+	message := fmt.Sprintf(gophercloud.CE_ErrUnexpectedTypeMessage, expected, actual)
+	err := gophercloud.NewSystemCommonError(gophercloud.CE_ErrUnexpectedTypeCode, message)
 	return true, err
 }
 

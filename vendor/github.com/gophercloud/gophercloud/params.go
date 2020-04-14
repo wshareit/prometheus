@@ -51,14 +51,10 @@ func BuildRequestBody(opts interface{}, parent string) (map[string]interface{}, 
 			f := optsType.Field(i)
 
 			if f.Name != strings.Title(f.Name) {
-				//fmt.Printf("Skipping field: %s...\n", f.Name)
 				continue
 			}
 
-			//fmt.Printf("Starting on field: %s...\n", f.Name)
-
 			zero := isZero(v)
-			//fmt.Printf("v is zero?: %v\n", zero)
 
 			// if the field has a required tag that's set to "true"
 			if requiredTag := f.Tag.Get("required"); requiredTag == "true" {
@@ -66,8 +62,8 @@ func BuildRequestBody(opts interface{}, parent string) (map[string]interface{}, 
 				// if the field's value is zero, return a missing-argument error
 				if zero {
 					// if the field has a 'required' tag, it can't have a zero-value
-					err := ErrMissingInput{}
-					err.Argument = f.Name
+					message := fmt.Sprintf(CE_MissingInputMessage, f.Name)
+					err := NewSystemCommonError(CE_MissingInputCode, message)
 					return nil, err
 				}
 			}
@@ -85,16 +81,13 @@ func BuildRequestBody(opts interface{}, parent string) (map[string]interface{}, 
 					xorFieldIsZero = isZero(xorField)
 				}
 				if !(zero != xorFieldIsZero) {
-					err := ErrMissingInput{}
-					err.Argument = fmt.Sprintf("%s/%s", f.Name, xorTag)
-					err.Info = fmt.Sprintf("Exactly one of %s and %s must be provided", f.Name, xorTag)
+					message := fmt.Sprintf(CE_MissingInputMessage, fmt.Sprintf("%s/%s", f.Name, xorTag))
+					err := NewSystemCommonError(CE_MissingInputCode, message)
 					return nil, err
 				}
 			}
 
 			if orTag := f.Tag.Get("or"); orTag != "" {
-				//fmt.Printf("Checking `or` tag for field with:\n\tname: %+v\n\torTag:%s\n", f.Name, orTag)
-				//fmt.Printf("field is zero?: %v\n", zero)
 				if zero {
 					orField := optsValue.FieldByName(orTag)
 					var orFieldIsZero bool
@@ -107,9 +100,8 @@ func BuildRequestBody(opts interface{}, parent string) (map[string]interface{}, 
 						orFieldIsZero = isZero(orField)
 					}
 					if orFieldIsZero {
-						err := ErrMissingInput{}
-						err.Argument = fmt.Sprintf("%s/%s", f.Name, orTag)
-						err.Info = fmt.Sprintf("At least one of %s and %s must be provided", f.Name, orTag)
+						message := fmt.Sprintf(CE_MissingInputMessage, fmt.Sprintf("%s/%s", f.Name, orTag))
+						err := NewSystemCommonError(CE_MissingInputCode, message)
 						return nil, err
 					}
 				}
@@ -120,22 +112,6 @@ func BuildRequestBody(opts interface{}, parent string) (map[string]interface{}, 
 				continue
 			}
 
-			if v.Kind() == reflect.Slice || (v.Kind() == reflect.Ptr && v.Elem().Kind() == reflect.Slice) {
-				sliceValue := v
-				if sliceValue.Kind() == reflect.Ptr {
-					sliceValue = sliceValue.Elem()
-				}
-
-				for i := 0; i < sliceValue.Len(); i++ {
-					element := sliceValue.Index(i)
-					if element.Kind() == reflect.Struct || (element.Kind() == reflect.Ptr && element.Elem().Kind() == reflect.Struct) {
-						_, err := BuildRequestBody(element.Interface(), "")
-						if err != nil {
-							return nil, err
-						}
-					}
-				}
-			}
 			if v.Kind() == reflect.Struct || (v.Kind() == reflect.Ptr && v.Elem().Kind() == reflect.Struct) {
 				if zero {
 					//fmt.Printf("value before change: %+v\n", optsValue.Field(i))
@@ -186,7 +162,10 @@ func BuildRequestBody(opts interface{}, parent string) (map[string]interface{}, 
 		return optsMap, nil
 	}
 	// Return an error if the underlying type of 'opts' isn't a struct.
-	return nil, fmt.Errorf("Options type is not a struct.")
+	//return nil, fmt.Errorf("Options type is not a struct.")
+
+	err := NewSystemCommonError(CE_OptionTypeNotStructCode, CE_OptionTypeNotStructMessage)
+	return nil, err
 }
 
 // EnabledState is a convenience type, mostly used in Create and Update
@@ -379,8 +358,9 @@ func BuildQueryString(opts interface{}) (*url.URL, error) {
 						}
 					}
 				} else {
-					// if the field has a 'required' tag, it can't have a zero-value
-					if requiredTag := f.Tag.Get("required"); requiredTag == "true" {
+					// Otherwise, the field is not set.
+					if len(tags) == 2 && tags[1] == "required" {
+						// And the field is required. Return an error.
 						return &url.URL{}, fmt.Errorf("Required query parameter [%s] not set.", f.Name)
 					}
 				}
@@ -390,7 +370,10 @@ func BuildQueryString(opts interface{}) (*url.URL, error) {
 		return &url.URL{RawQuery: params.Encode()}, nil
 	}
 	// Return an error if the underlying type of 'opts' isn't a struct.
-	return nil, fmt.Errorf("Options type is not a struct.")
+	//return nil, fmt.Errorf("Options type is not a struct.")
+
+	err := NewSystemCommonError(CE_OptionTypeNotStructCode, CE_OptionTypeNotStructMessage)
+	return nil, err
 }
 
 /*
@@ -454,9 +437,10 @@ func BuildHeaders(opts interface{}) (map[string]string, error) {
 						optsMap[tags[0]] = strconv.FormatBool(v.Bool())
 					}
 				} else {
-					// if the field has a 'required' tag, it can't have a zero-value
-					if requiredTag := f.Tag.Get("required"); requiredTag == "true" {
-						return optsMap, fmt.Errorf("Required header [%s] not set.", f.Name)
+					// Otherwise, the field is not set.
+					if len(tags) == 2 && tags[1] == "required" {
+						// And the field is required. Return an error.
+						return optsMap, fmt.Errorf("Required header not set.")
 					}
 				}
 			}
@@ -465,7 +449,10 @@ func BuildHeaders(opts interface{}) (map[string]string, error) {
 		return optsMap, nil
 	}
 	// Return an error if the underlying type of 'opts' isn't a struct.
-	return optsMap, fmt.Errorf("Options type is not a struct.")
+	//return optsMap, fmt.Errorf("Options type is not a struct.")
+
+	err := NewSystemCommonError(CE_OptionTypeNotStructCode, CE_OptionTypeNotStructMessage)
+	return optsMap, err
 }
 
 // IDSliceToQueryString takes a slice of elements and converts them into a query

@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
+	"runtime"
+	"path"
 )
 
 // WaitFor polls a predicate function, once per second, up to a timeout limit.
@@ -47,7 +51,7 @@ func WaitFor(timeout int, predicate func() (bool, error)) error {
 			if result.Success {
 				return nil
 			}
-		// If the predicate has not finished by the timeout, cancel it.
+			// If the predicate has not finished by the timeout, cancel it.
 		case <-time.After(time.Duration(timeout) * time.Second):
 			return fmt.Errorf("A timeout occurred")
 		}
@@ -99,4 +103,82 @@ func NormalizePathURL(basePath, rawPath string) (string, error) {
 	u.Scheme = "file"
 	return u.String(), nil
 
+}
+
+// InitStructWithDefaultTag,Initialize the structure instance using the structure tag.
+func InitStructWithDefaultTag(bean interface{}) {
+	configType := reflect.TypeOf(bean)
+	for i := 0; i < configType.Elem().NumField(); i++ {
+		field := configType.Elem().Field(i)
+		defaultValue := field.Tag.Get("default")
+		if defaultValue == "" {
+			continue
+		}
+		setter := reflect.ValueOf(bean).Elem().Field(i)
+		switch field.Type.String() {
+		case "int":
+			intValue, _ := strconv.ParseInt(defaultValue, 10, 64)
+			setter.SetInt(intValue)
+		case "time.Duration":
+			intValue, _ := strconv.ParseInt(defaultValue, 10, 64)
+			setter.SetInt(intValue)
+		case "string":
+			setter.SetString(defaultValue)
+		case "bool":
+			boolValue, _ := strconv.ParseBool(defaultValue)
+			setter.SetBool(boolValue)
+		}
+	}
+}
+
+// IsInStrSlice, Determine if the string is in the array.
+func IsInStrSlice(sliceStr []string, s string) bool {
+	for _, v := range sliceStr {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// EnableDebug, SDK log switch defaults value is false.
+var EnableDebug bool
+
+// Logger, define the logger struct.
+type Logger struct {
+	DebugEnable bool `default:"false"`
+}
+
+// Debug, Format the log information and print the information to the console.
+func (log *Logger) Debug(format string, v ...interface{}) {
+	if log.DebugEnable {
+		msg := fmt.Sprintf("[DEBUG] "+format, v...)
+		writeMsg(msg)
+	}
+}
+
+func writeMsg(msg string) {
+	_, file, line, ok := runtime.Caller(2)
+	if !ok {
+		file = "???"
+		line = 0
+	}
+	_, filename := path.Split(file)
+	msg = fmt.Sprintf("[%s:%s] %s", filename, strconv.FormatInt(int64(line), 10), msg)
+
+	printMsg(msg)
+}
+
+//printMsg
+func printMsg(msg string) {
+	when := time.Now().Format("2006-01-02 15:04:05")
+	buf := []byte(fmt.Sprintf("[%s] ", when))
+	fmt.Println(string(append(append(buf, msg...))))
+}
+
+// GetLogger ,Return log initialization structure instance.
+func GetLogger() (*Logger) {
+	log := new(Logger)
+	log.DebugEnable = EnableDebug
+	return log
 }

@@ -2,38 +2,22 @@ package gophercloud
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
+
+	//"strconv"
 	"strings"
 	"sync"
+
+	"github.com/gophercloud/gophercloud/auth/aksk"
 )
 
 // DefaultUserAgent is the default User-Agent string set in the request header.
-const DefaultUserAgent = "gophercloud/2.0.0"
-
-// UserAgent represents a User-Agent header.
-type UserAgent struct {
-	// prepend is the slice of User-Agent strings to prepend to DefaultUserAgent.
-	// All the strings to prepend are accumulated and prepended in the Join method.
-	prepend []string
-}
-
-// Prepend prepends a user-defined string to the default User-Agent string. Users
-// may pass in one or more strings to prepend.
-func (ua *UserAgent) Prepend(s ...string) {
-	ua.prepend = append(s, ua.prepend...)
-}
-
-// Join concatenates all the user-defined User-Agend strings with the default
-// Gophercloud User-Agent string.
-func (ua *UserAgent) Join() string {
-	uaSlice := append(ua.prepend, DefaultUserAgent)
-	return strings.Join(uaSlice, " ")
-}
+const DefaultUserAgent = "huawei-cloud-sdk-go/1.0.21"
 
 // ProviderClient stores details that are required to interact with any
 // services within a specific provider's API.
@@ -73,13 +57,6 @@ type ProviderClient struct {
 	// authentication functions for different Identity service versions.
 	ReauthFunc func() error
 
-	// Throwaway determines whether if this client is a throw-away client. It's a copy of user's provider client
-	// with the token and reauth func zeroed. Such client can be used to perform reauthorization.
-	Throwaway bool
-
-	// Context is the context passed to the HTTP request.
-	Context context.Context
-
 	// mut is a mutex for the client. It protects read and write access to client attributes such as getting
 	// and setting the TokenID.
 	mut *sync.RWMutex
@@ -88,34 +65,41 @@ type ProviderClient struct {
 	// attempt happens at one time.
 	reauthmut *reauthlock
 
-	authResult AuthResult
+	// DomainID
+	DomainID string
+
+	// ProjectID
+	ProjectID string
+
+	// Conf define the configs parameter of the provider client
+	Conf *Config
+
+	// AKSKAuthOptions provides the value for AK/SK authentication, it should be nil if you use token authentication,
+	// Otherwise, it must have a value
+	AKSKOptions aksk.AKSKOptions
 }
 
 // reauthlock represents a set of attributes used to help in the reauthentication process.
 type reauthlock struct {
 	sync.RWMutex
-	// This channel is non-nil during reauthentication. It can be used to ask the
-	// goroutine doing Reauthenticate() for its result. Look at the implementation
-	// of Reauthenticate() for details.
-	ongoing chan<- (chan<- error)
+	reauthing bool
+}
+
+//GetProjectID,Implement the GetProjectID() interface, return client projectID.
+func (client *ProviderClient) GetProjectID() string {
+	return client.ProjectID
 }
 
 // AuthenticatedHeaders returns a map of HTTP headers that are common for all
-// authenticated service requests. Blocks if Reauthenticate is in progress.
+// authenticated service requests.
 func (client *ProviderClient) AuthenticatedHeaders() (m map[string]string) {
-	if client.IsThrowaway() {
-		return
-	}
 	if client.reauthmut != nil {
-		// If a Reauthenticate is in progress, wait for it to complete.
-		client.reauthmut.Lock()
-		ongoing := client.reauthmut.ongoing
-		client.reauthmut.Unlock()
-		if ongoing != nil {
-			responseChannel := make(chan error)
-			ongoing <- responseChannel
-			_ = <-responseChannel
+		client.reauthmut.RLock()
+		if client.reauthmut.reauthing {
+			client.reauthmut.RUnlock()
+			return
 		}
+		client.reauthmut.RUnlock()
 	}
 	t := client.Token()
 	if t == "" {
@@ -131,20 +115,6 @@ func (client *ProviderClient) UseTokenLock() {
 	client.reauthmut = new(reauthlock)
 }
 
-// GetAuthResult returns the result from the request that was used to obtain a
-// provider client's Keystone token.
-//
-// The result is nil when authentication has not yet taken place, when the token
-// was set manually with SetToken(), or when a ReauthFunc was used that does not
-// record the AuthResult.
-func (client *ProviderClient) GetAuthResult() AuthResult {
-	if client.mut != nil {
-		client.mut.RLock()
-		defer client.mut.RUnlock()
-	}
-	return client.authResult
-}
-
 // Token safely reads the value of the auth token from the ProviderClient. Applications should
 // call this method to access the token instead of the TokenID field
 func (client *ProviderClient) Token() string {
@@ -156,131 +126,43 @@ func (client *ProviderClient) Token() string {
 }
 
 // SetToken safely sets the value of the auth token in the ProviderClient. Applications may
-// use this method in a custom ReauthFunc.
-//
-// WARNING: This function is deprecated. Use SetTokenAndAuthResult() instead.
+// use this method in a custom ReauthFunc
 func (client *ProviderClient) SetToken(t string) {
 	if client.mut != nil {
 		client.mut.Lock()
 		defer client.mut.Unlock()
 	}
 	client.TokenID = t
-	client.authResult = nil
 }
 
-// SetTokenAndAuthResult safely sets the value of the auth token in the
-// ProviderClient and also records the AuthResult that was returned from the
-// token creation request. Applications may call this in a custom ReauthFunc.
-func (client *ProviderClient) SetTokenAndAuthResult(r AuthResult) error {
-	tokenID := ""
-	var err error
-	if r != nil {
-		tokenID, err = r.ExtractTokenID()
-		if err != nil {
-			return err
-		}
-	}
-
-	if client.mut != nil {
-		client.mut.Lock()
-		defer client.mut.Unlock()
-	}
-	client.TokenID = tokenID
-	client.authResult = r
-	return nil
-}
-
-// CopyTokenFrom safely copies the token from another ProviderClient into the
-// this one.
-func (client *ProviderClient) CopyTokenFrom(other *ProviderClient) {
-	if client.mut != nil {
-		client.mut.Lock()
-		defer client.mut.Unlock()
-	}
-	if other.mut != nil && other.mut != client.mut {
-		other.mut.RLock()
-		defer other.mut.RUnlock()
-	}
-	client.TokenID = other.TokenID
-	client.authResult = other.authResult
-}
-
-// IsThrowaway safely reads the value of the client Throwaway field.
-func (client *ProviderClient) IsThrowaway() bool {
-	if client.reauthmut != nil {
-		client.reauthmut.RLock()
-		defer client.reauthmut.RUnlock()
-	}
-	return client.Throwaway
-}
-
-// SetThrowaway safely sets the value of the client Throwaway field.
-func (client *ProviderClient) SetThrowaway(v bool) {
-	if client.reauthmut != nil {
-		client.reauthmut.Lock()
-		defer client.reauthmut.Unlock()
-	}
-	client.Throwaway = v
-}
-
-// Reauthenticate calls client.ReauthFunc in a thread-safe way. If this is
-// called because of a 401 response, the caller may pass the previous token. In
-// this case, the reauthentication can be skipped if another thread has already
-// reauthenticated in the meantime. If no previous token is known, an empty
-// string should be passed instead to force unconditional reauthentication.
-func (client *ProviderClient) Reauthenticate(previousToken string) error {
+//Reauthenticate calls client.ReauthFunc in a thread-safe way. If this is
+//called because of a 401 response, the caller may pass the previous token. In
+//this case, the reauthentication can be skipped if another thread has already
+//reauthenticated in the meantime. If no previous token is known, an empty
+//string should be passed instead to force unconditional reauthentication.
+func (client *ProviderClient) Reauthenticate(previousToken string) (err error) {
 	if client.ReauthFunc == nil {
 		return nil
 	}
 
-	if client.reauthmut == nil {
+	if client.mut == nil {
 		return client.ReauthFunc()
 	}
+	client.mut.Lock()
+	defer client.mut.Unlock()
 
-	messages := make(chan (chan<- error))
-
-	// Check if a Reauthenticate is in progress, or start one if not.
 	client.reauthmut.Lock()
-	ongoing := client.reauthmut.ongoing
-	if ongoing == nil {
-		client.reauthmut.ongoing = messages
-	}
+	client.reauthmut.reauthing = true
 	client.reauthmut.Unlock()
 
-	// If Reauthenticate is running elsewhere, wait for its result.
-	if ongoing != nil {
-		responseChannel := make(chan error)
-		ongoing <- responseChannel
-		return <-responseChannel
-	}
-
-	// Perform the actual reauthentication.
-	var err error
 	if previousToken == "" || client.TokenID == previousToken {
 		err = client.ReauthFunc()
-	} else {
-		err = nil
 	}
 
-	// Mark Reauthenticate as finished.
 	client.reauthmut.Lock()
-	client.reauthmut.ongoing = nil
+	client.reauthmut.reauthing = false
 	client.reauthmut.Unlock()
-
-	// Report result to all other interested goroutines.
-	//
-	// This happens in a separate goroutine because another goroutine might have
-	// acquired a copy of `client.reauthmut.ongoing` before we cleared it, but not
-	// have come around to sending its request. By answering in a goroutine, we
-	// can have that goroutine linger until all responseChannels have been sent.
-	// When GC has collected all sendings ends of the channel, our receiving end
-	// will be closed and the goroutine will end.
-	go func() {
-		for responseChannel := range messages {
-			responseChannel <- err
-		}
-	}()
-	return err
+	return
 }
 
 // RequestOpts customizes the behavior of the provider.Request() method.
@@ -305,15 +187,8 @@ type RequestOpts struct {
 	// ErrorContext specifies the resource error type to return if an error is encountered.
 	// This lets resources override default error messages based on the response status code.
 	ErrorContext error
-}
 
-// requestState contains temporary state for a single ProviderClient.Request() call.
-type requestState struct {
-	// This flag indicates if we have reauthenticated during this request because of a 401 response.
-	// It ensures that we don't reauthenticate multiple times for a single request. If we
-	// reauthenticate, but keep getting 401 responses with the fresh token, reauthenticating some more
-	// will just get us into an infinite loop.
-	hasReauthenticated bool
+	HandleError func(httpStatus int, responseContent string) error
 }
 
 var applicationJSON = "application/json"
@@ -321,12 +196,124 @@ var applicationJSON = "application/json"
 // Request performs an HTTP request using the ProviderClient's current HTTPClient. An authentication
 // header will automatically be provided.
 func (client *ProviderClient) Request(method, url string, options *RequestOpts) (*http.Response, error) {
-	return client.doRequest(method, url, options, &requestState{
-		hasReauthenticated: false,
-	})
+	req, err := buildReq(client, method, url, options)
+	if err != nil {
+		return nil, err
+	}
+	log := GetLogger()
+	prereqtok := req.Header.Get("X-Auth-Token")
+	var resp *http.Response
+
+	/*
+		//根据配置执行超时重连
+		for retryTimes := 0; retryTimes <= client.Conf.MaxRetryTime; retryTimes++ {
+			resp, err = client.HTTPClient.Do(req)
+
+			var timeout bool
+			// receive error
+			if err != nil {
+				if timeout = isTimeout(err); !timeout {
+					//fmt.Println("timeout:", timeout)
+					// if not timeout error, return
+					return nil, err
+				} else if retryTimes >= client.Conf.MaxRetryTime {
+					timeoutErrorMsg := fmt.Sprintf(CE_TimeoutErrorMessage, strconv.Itoa(retryTimes+1), strconv.Itoa(retryTimes+1))
+					err := NewSystemCommonError(CE_TimeoutErrorCode, timeoutErrorMsg)
+					return nil, err
+				}
+			}
+
+			//  if status code >= 500 or timeout, will trigger retry
+			if client.Conf.AutoRetry && (timeout || isServerError(resp)) {
+				req, err = buildReq(client, method, url, options)
+				if err != nil {
+					return nil, err
+				}
+
+				continue
+			}
+			break
+		}
+	*/
+
+	//fmt.Println("url:", url)
+	//Issue the request.  原代码，注释掉
+	resp, err = client.HTTPClient.Do(req)
+	if err != nil {
+		log.Debug("Request error", err)
+		return nil, err
+	}
+
+	log.Debug("Request method is %s,Request url is %s", req.Method, url)
+	log.Debug("Request header is %s", req.Header)
+	log.Debug("Response status code is %d", resp.StatusCode)
+	log.Debug("Response header is %s", resp.Header)
+	bodyBytes, _ := ioutil.ReadAll(resp.Body)
+	resp.Body.Close() //  must close
+	resp.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	log.Debug("Response body is %s\n", string(bodyBytes))
+
+	// Allow default OkCodes if none explicitly set
+	if options.OkCodes == nil {
+		options.OkCodes = defaultOkCodes(method)
+	}
+
+	// Validate the HTTP response status.
+	var ok bool
+	for _, code := range options.OkCodes {
+		if resp.StatusCode == code {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		body, _ := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		log.Debug("Request failed response body is %s", string(body))
+		/*
+		    http.StatusBadRequest: //400
+		   	http.StatusUnauthorized: //401
+		   	http.StatusForbidden: //403
+		   	http.StatusNotFound: //404
+		   	http.StatusMethodNotAllowed: //405
+		   	http.StatusRequestTimeout: //408
+		    http.StatusConflict: //409
+		   	http.StatusTooManyRequests: //429
+		   	http.StatusInternalServerError: //500
+		   	http.StatusServiceUnavailable: //503
+		*/
+		switch resp.StatusCode {
+		case http.StatusUnauthorized: //401
+			if client.ReauthFunc != nil {
+				return doReauthAndReq(client, prereqtok, method, url, options)
+			}
+		case http.StatusForbidden:
+			b := strings.Contains(string(body), "Token need to refresh")
+			if client.ReauthFunc != nil && b {
+				return doReauthAndReq(client, prereqtok, method, url, options)
+			}
+		}
+
+		if options.HandleError != nil {
+			return resp, options.HandleError(resp.StatusCode, string(body))
+		}
+
+		return resp, NewSystemServerError(resp.StatusCode, string(body))
+	}
+
+	// Parse the response body as JSON, if requested to do so.
+	if options.JSONResponse != nil {
+		defer resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(options.JSONResponse); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
 }
 
-func (client *ProviderClient) doRequest(method, url string, options *RequestOpts, state *requestState) (*http.Response, error) {
+//构造request对象
+func buildReq(client *ProviderClient, method, url string, options *RequestOpts) (*http.Request, error) {
 	var body io.Reader
 	var contentType *string
 
@@ -334,14 +321,14 @@ func (client *ProviderClient) doRequest(method, url string, options *RequestOpts
 	// io.ReadSeeker as-is. Default the content-type to application/json.
 	if options.JSONBody != nil {
 		if options.RawBody != nil {
-			return nil, errors.New("please provide only one of JSONBody or RawBody to gophercloud.Request()")
+			panic("Please provide only one of JSONBody or RawBody to gophercloud.Request().")
 		}
 
 		rendered, err := json.Marshal(options.JSONBody)
 		if err != nil {
 			return nil, err
 		}
-
+		GetLogger().Debug("Request body is %s", string(rendered))
 		body = bytes.NewReader(rendered)
 		contentType = &applicationJSON
 	}
@@ -354,9 +341,6 @@ func (client *ProviderClient) doRequest(method, url string, options *RequestOpts
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
-	}
-	if client.Context != nil {
-		req = req.WithContext(client.Context)
 	}
 
 	// Populate the request headers. Apply options.MoreHeaders last, to give the caller the chance to
@@ -384,141 +368,49 @@ func (client *ProviderClient) doRequest(method, url string, options *RequestOpts
 		req.Header.Set(k, v)
 	}
 
+	if client.AKSKOptions.AccessKey != "" {
+		aksk.Sign(req, aksk.SignOptions{
+			AccessKey: client.AKSKOptions.AccessKey,
+			SecretKey: client.AKSKOptions.SecretKey,
+		})
+	}
+
 	// Set connection parameter to close the connection immediately when we've got the response
 	req.Close = true
 
-	prereqtok := req.Header.Get("X-Auth-Token")
+	return req, nil
+}
 
-	// Issue the request.
-	resp, err := client.HTTPClient.Do(req)
+//reauth and request
+func doReauthAndReq(client *ProviderClient, prereqtok, method, url string, options *RequestOpts) (*http.Response, error) {
+	err := client.Reauthenticate(prereqtok)
+	if err != nil {
+		message:=fmt.Sprintf(CE_ReauthFuncErrorMessage, err.Error())
+		return nil, NewSystemCommonError(CE_ReauthFuncErrorCode, message)
+	}
+	if options.RawBody != nil {
+		if seeker, ok := options.RawBody.(io.Seeker); ok {
+			seeker.Seek(0, 0)
+		}
+	}
+	resp, err := client.Request(method, url, options)
 	if err != nil {
 		return nil, err
 	}
 
-	// Allow default OkCodes if none explicitly set
-	okc := options.OkCodes
-	if okc == nil {
-		okc = defaultOkCodes(method)
-	}
-
-	// Validate the HTTP response status.
-	var ok bool
-	for _, code := range okc {
-		if resp.StatusCode == code {
-			ok = true
-			break
-		}
-	}
-
-	if !ok {
-		body, _ := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		respErr := ErrUnexpectedResponseCode{
-			URL:      url,
-			Method:   method,
-			Expected: options.OkCodes,
-			Actual:   resp.StatusCode,
-			Body:     body,
-		}
-
-		errType := options.ErrorContext
-		switch resp.StatusCode {
-		case http.StatusBadRequest:
-			err = ErrDefault400{respErr}
-			if error400er, ok := errType.(Err400er); ok {
-				err = error400er.Error400(respErr)
-			}
-		case http.StatusUnauthorized:
-			if client.ReauthFunc != nil && !state.hasReauthenticated {
-				err = client.Reauthenticate(prereqtok)
-				if err != nil {
-					e := &ErrUnableToReauthenticate{}
-					e.ErrOriginal = respErr
-					return nil, e
-				}
-				if options.RawBody != nil {
-					if seeker, ok := options.RawBody.(io.Seeker); ok {
-						seeker.Seek(0, 0)
-					}
-				}
-				state.hasReauthenticated = true
-				resp, err = client.doRequest(method, url, options, state)
-				if err != nil {
-					switch err.(type) {
-					case *ErrUnexpectedResponseCode:
-						e := &ErrErrorAfterReauthentication{}
-						e.ErrOriginal = err.(*ErrUnexpectedResponseCode)
-						return nil, e
-					default:
-						e := &ErrErrorAfterReauthentication{}
-						e.ErrOriginal = err
-						return nil, e
-					}
-				}
-				return resp, nil
-			}
-			err = ErrDefault401{respErr}
-			if error401er, ok := errType.(Err401er); ok {
-				err = error401er.Error401(respErr)
-			}
-		case http.StatusForbidden:
-			err = ErrDefault403{respErr}
-			if error403er, ok := errType.(Err403er); ok {
-				err = error403er.Error403(respErr)
-			}
-		case http.StatusNotFound:
-			err = ErrDefault404{respErr}
-			if error404er, ok := errType.(Err404er); ok {
-				err = error404er.Error404(respErr)
-			}
-		case http.StatusMethodNotAllowed:
-			err = ErrDefault405{respErr}
-			if error405er, ok := errType.(Err405er); ok {
-				err = error405er.Error405(respErr)
-			}
-		case http.StatusRequestTimeout:
-			err = ErrDefault408{respErr}
-			if error408er, ok := errType.(Err408er); ok {
-				err = error408er.Error408(respErr)
-			}
-		case http.StatusConflict:
-			err = ErrDefault409{respErr}
-			if error409er, ok := errType.(Err409er); ok {
-				err = error409er.Error409(respErr)
-			}
-		case 429:
-			err = ErrDefault429{respErr}
-			if error429er, ok := errType.(Err429er); ok {
-				err = error429er.Error429(respErr)
-			}
-		case http.StatusInternalServerError:
-			err = ErrDefault500{respErr}
-			if error500er, ok := errType.(Err500er); ok {
-				err = error500er.Error500(respErr)
-			}
-		case http.StatusServiceUnavailable:
-			err = ErrDefault503{respErr}
-			if error503er, ok := errType.(Err503er); ok {
-				err = error503er.Error503(respErr)
-			}
-		}
-
-		if err == nil {
-			err = respErr
-		}
-
-		return resp, err
-	}
-
-	// Parse the response body as JSON, if requested to do so.
-	if options.JSONResponse != nil {
-		defer resp.Body.Close()
-		if err := json.NewDecoder(resp.Body).Decode(options.JSONResponse); err != nil {
-			return nil, err
-		}
-	}
-
 	return resp, nil
+}
+
+func isTimeout(err error) bool {
+	if err == nil {
+		return true
+	}
+	netErr, isNetError := err.(net.Error)
+	return isNetError && netErr.Timeout()
+}
+
+func isServerError(httpResponse *http.Response) bool {
+	return httpResponse.StatusCode >= http.StatusInternalServerError
 }
 
 func defaultOkCodes(method string) []int {
@@ -530,10 +422,30 @@ func defaultOkCodes(method string) []int {
 	case method == "PUT":
 		return []int{201, 202}
 	case method == "PATCH":
-		return []int{200, 202, 204}
+		return []int{200, 204}
 	case method == "DELETE":
 		return []int{202, 204}
 	}
 
 	return []int{}
+}
+
+// UserAgent represents a User-Agent header.
+type UserAgent struct {
+	// prepend is the slice of User-Agent strings to prepend to DefaultUserAgent.
+	// All the strings to prepend are accumulated and prepended in the Join method.
+	prepend []string
+}
+
+// Prepend prepends a user-defined string to the default User-Agent string. Users
+// may pass in one or more strings to prepend.
+func (ua *UserAgent) Prepend(s ...string) {
+	ua.prepend = append(s, ua.prepend...)
+}
+
+// Join concatenates all the user-defined User-Agend strings with the default
+// Gophercloud User-Agent string.
+func (ua *UserAgent) Join() string {
+	uaSlice := append(ua.prepend, DefaultUserAgent)
+	return strings.Join(uaSlice, " ")
 }

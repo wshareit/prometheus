@@ -24,18 +24,19 @@ import (
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 
-	sd_config "github.com/prometheus/prometheus/discovery/config"
-	"github.com/prometheus/prometheus/discovery/targetgroup"
-
+	"github.com/prometheus/prometheus/discovery/alb"
+	"github.com/prometheus/prometheus/discovery/autoscala"
 	"github.com/prometheus/prometheus/discovery/azure"
+	sd_config "github.com/prometheus/prometheus/discovery/config"
 	"github.com/prometheus/prometheus/discovery/consul"
 	"github.com/prometheus/prometheus/discovery/dns"
 	"github.com/prometheus/prometheus/discovery/ec2"
 	"github.com/prometheus/prometheus/discovery/file"
 	"github.com/prometheus/prometheus/discovery/gce"
+	"github.com/prometheus/prometheus/discovery/huawei_elb"
 	"github.com/prometheus/prometheus/discovery/kubernetes"
 	"github.com/prometheus/prometheus/discovery/marathon"
-	"github.com/prometheus/prometheus/discovery/openstack"
+	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/prometheus/prometheus/discovery/triton"
 	"github.com/prometheus/prometheus/discovery/zookeeper"
 )
@@ -394,11 +395,6 @@ func (m *Manager) registerProviders(cfg sd_config.ServiceDiscoveryConfig, setNam
 			return ec2.NewDiscovery(c, log.With(m.logger, "discovery", "ec2")), nil
 		})
 	}
-	for _, c := range cfg.OpenstackSDConfigs {
-		add(c, func() (Discoverer, error) {
-			return openstack.NewDiscovery(c, log.With(m.logger, "discovery", "openstack"))
-		})
-	}
 	for _, c := range cfg.GCESDConfigs {
 		add(c, func() (Discoverer, error) {
 			return gce.NewDiscovery(*c, log.With(m.logger, "discovery", "gce"))
@@ -417,6 +413,21 @@ func (m *Manager) registerProviders(cfg sd_config.ServiceDiscoveryConfig, setNam
 	if len(cfg.StaticConfigs) > 0 {
 		add(setName, func() (Discoverer, error) {
 			return &StaticProvider{TargetGroups: cfg.StaticConfigs}, nil
+		})
+	}
+	for _, c := range cfg.ALBSDConfigs {
+		add(c, func() (Discoverer, error) {
+			return alb.NewDiscovery(c, log.With(m.logger, "discovery", "alb")), nil
+		})
+	}
+	for _, c := range cfg.AutoscalaSDConfigs {
+		add(c, func() (Discoverer, error) {
+			return autoscala.NewDiscovery(c, log.With(m.logger, "discovery", "autoscala")), nil
+		})
+	}
+	for _, c := range cfg.ELBSDConfigs {
+		add(c, func() (Discoverer, error) {
+			return huawei_elb.NewDiscovery(c, log.With(m.logger, "discovery", "elb")), nil
 		})
 	}
 	if !added {

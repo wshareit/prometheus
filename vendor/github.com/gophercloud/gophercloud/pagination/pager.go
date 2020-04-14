@@ -1,7 +1,7 @@
 package pagination
 
 import (
-	"errors"
+	//"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -10,10 +10,10 @@ import (
 	"github.com/gophercloud/gophercloud"
 )
 
-var (
-	// ErrPageNotAvailable is returned from a Pager when a next or previous page is requested, but does not exist.
-	ErrPageNotAvailable = errors.New("The requested page does not exist.")
-)
+//var (
+//	// ErrPageNotAvailable is returned from a Pager when a next or previous page is requested, but does not exist.
+//	ErrPageNotAvailable = errors.New("The requested page does not exist.")
+//)
 
 // Page must be satisfied by the result type of any resource collection.
 // It allows clients to interact with the resource uniformly, regardless of whether or not or how it's paginated.
@@ -224,9 +224,15 @@ func (p Pager) AllPages() (Page, error) {
 			body.Index(i).Set(reflect.ValueOf(s))
 		}
 	default:
-		err := gophercloud.ErrUnexpectedType{}
-		err.Expected = "map[string]interface{}/[]byte/[]interface{}"
-		err.Actual = fmt.Sprintf("%T", pb)
+		//		err := gophercloud.ErrUnexpectedType{}
+		//		err.Expected = "map[string]interface{}/[]byte/[]interface{}"
+		//		err.Actual = fmt.Sprintf("%T", pb)
+		//		return nil, err
+
+		expected := "map[string]interface{}/[]byte/[]interface{}"
+		actual := fmt.Sprintf("%T", pb)
+		message := fmt.Sprintf(gophercloud.CE_ErrUnexpectedTypeMessage, expected, actual)
+		err := gophercloud.NewSystemCommonError(gophercloud.CE_ErrUnexpectedTypeCode, message)
 		return nil, err
 	}
 
