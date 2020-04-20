@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -186,7 +187,7 @@ func (d *Discovery) refresh(ctx context.Context, atg *ElbPool, ch chan<- []*targ
 	}
 
 	tg := &targetgroup.Group{
-		Source: atg.Name,
+		Source: atg.Name + "_" + strconv.Itoa(atg.Port),
 	}
 
 	if len(members) > 0 {
